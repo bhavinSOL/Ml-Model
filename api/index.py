@@ -6,11 +6,13 @@ from flask import Flask, request, jsonify
 import joblib
 import numpy as np
 import json
+from flask_cors import CORS
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 app = Flask(__name__)
 
+CORS(app)
 # Load models and data with proper paths
 model_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
 
@@ -21,7 +23,11 @@ try:
     
     with open(os.path.join(model_dir, 'ideal_ranges.json'), 'r') as f:
         ideal_ranges = json.load(f)
-    
+	
+    fertilizer_model = joblib.load(os.path.join(model_dir, 'fertilizer_model.pkl'))
+    fertilizer_encoder = joblib.load(os.path.join(model_dir, 'fertilizer_encoder.pkl'))
+    crop_encoder = joblib.load(os.path.join(model_dir, 'crop_encoder.pkl'))    
+
     print("Models loaded successfully!")
 except Exception as e:
     print(f"Error loading models: {e}")
@@ -204,6 +210,44 @@ def predict_yield():
             "unit": "kg/hectare"
         })
     
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+@app.route('/recommend-fertilizer', methods=['POST'])
+def recommend_fertilizer():
+    """Recommend fertilizer based on crop and soil parameters"""
+    try:
+        if fertilizer_model is None or fertilizer_encoder is None:
+            return jsonify({"error": "Fertilizer model not loaded"}), 500
+
+        data = request.get_json()
+        required_fields = ['crop'] + FEATURE_COLUMNS
+        is_valid, message = validate_input_data(data, required_fields)
+        if not is_valid:
+            return jsonify({"error": message}), 400
+
+        crop = data['crop'].lower()
+
+        # Encode crop
+        if crop not in label_encoder.classes_:
+            return jsonify({"error": f"Crop '{crop}' not found"}), 400
+        crop_encoded = label_encoder.transform([crop])[0]
+
+        # Prepare features
+        features = np.array([[
+            data['nitrogen'], data['phosphorus'], data['potassium'],
+            data['temperature'], data['humidity'], data['ph'], data['rainfall'],
+            crop_encoded
+        ]])
+
+        # Predict fertilizer
+        pred_encoded = fertilizer_model.predict(features)[0]
+        fertilizer = fertilizer_encoder.inverse_transform([pred_encoded])[0]
+
+        return jsonify({
+            "crop": crop,
+            "recommended_fertilizer": fertilizer
+        })
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
